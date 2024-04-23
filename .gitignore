@@ -1,0 +1,5 @@
+.idea/
+cmake-build-debug/
+cmake-build-release/
+conan_provider.cmake
+.DS_Store
