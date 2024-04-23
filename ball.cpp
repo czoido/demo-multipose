@@ -12,8 +12,6 @@ Ball::Ball(const b2Vec2& position, b2World& world)
     bodyDef.position.Set(position.x/WORLD_SCALE, position.y/WORLD_SCALE);
     _body = world.CreateBody(&bodyDef);
 
-    // Next we create a fixture definition using the box. Notice that we set density to 1.
-    // The default density is zero. Also, the friction on the shape is set to 0.3.
     b2FixtureDef fixtureDef;
 
     b2CircleShape ballShape;
@@ -37,7 +35,6 @@ void Ball::render(cv::Mat& image) {
     int pixelX = static_cast<int>(position.x * WORLD_SCALE);
     int pixelY = static_cast<int>(position.y * WORLD_SCALE);
     int pixelRadius = 50;
-    // Dibuja un círculo en la posición de la pelota en la imagen
     cv::circle(image, cv::Point(pixelX, pixelY), pixelRadius, cv::Scalar(0, 255, 255), -1);
 }
 
