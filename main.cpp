@@ -143,11 +143,10 @@ const float headRadius = 1.0f;
 const float impulseStrength = 2.0f;
 
 void updateBallImpulse(cv::Mat &target, float *output, b2World &world, Ball &ball, double deltaTime) {
-    int poses = 6; // Asumiendo que hay hasta 6 personas detectadas
+    int poses = 6;
     int width = target.size().width;
     int height = target.size().height;
 
-    // Actualización: Incluir índices de los pies
     const int headIndex = 0;
     const int leftWristIndex = 9;
     const int rightWristIndex = 10;
@@ -166,7 +165,7 @@ void updateBallImpulse(cv::Mat &target, float *output, b2World &world, Ball &bal
             float x = pose[3 * index + 1] * width;
             cv::Point2f currentPosition(x, y);
 
-            int key = p * 100 + index;  // Clave única para cada persona y cada parte del cuerpo
+            int key = p * 100 + index;  
             if (previousHeadPositions.find(key) != previousHeadPositions.end()) {
                 cv::Point2f prevPosition = previousHeadPositions[key];
                 cv::Point2f velocity = (currentPosition - prevPosition) / static_cast<float>(deltaTime);
