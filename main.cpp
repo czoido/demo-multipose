@@ -147,24 +147,26 @@ void updateBallImpulse(cv::Mat &target, float *output, b2World &world, Ball &bal
     int width = target.size().width;
     int height = target.size().height;
 
-    // Índices de keypoints para cabeza y muñecas (ajustar según tu modelo específico)
+    // Actualización: Incluir índices de los pies
     const int headIndex = 0;
     const int leftWristIndex = 9;
     const int rightWristIndex = 10;
+    const int leftAnkleIndex = 15;
+    const int rightAnkleIndex = 16;
+
+    std::vector<int> indices = {headIndex, leftWristIndex, rightWristIndex, leftAnkleIndex, rightAnkleIndex}; // Incluir pies
 
     for (int p = 0; p < poses; p++) {
-        float *pose = output + (56 * p);  // Asumiendo que cada pose tiene 56 valores (17 keypoints * 3 valores cada uno + 5 adicionales)
-        float score = pose[55];  // Score de detección de la pose
+        float *pose = output + (56 * p);
+        float score = pose[55];
         if (score < poseThreshold) continue;
 
-        // Procesar la cabeza y ambas muñecas
-        std::vector<int> indices = {headIndex, leftWristIndex, rightWristIndex};
         for (int index : indices) {
             float y = pose[3 * index] * height;
             float x = pose[3 * index + 1] * width;
             cv::Point2f currentPosition(x, y);
 
-            int key = p * 100 + index;  // clave única para cada persona y cada parte del cuerpo
+            int key = p * 100 + index;  // Clave única para cada persona y cada parte del cuerpo
             if (previousHeadPositions.find(key) != previousHeadPositions.end()) {
                 cv::Point2f prevPosition = previousHeadPositions[key];
                 cv::Point2f velocity = (currentPosition - prevPosition) / static_cast<float>(deltaTime);
