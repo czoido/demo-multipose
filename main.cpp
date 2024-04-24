@@ -12,6 +12,8 @@
 #include <opencv2/highgui.hpp>
 #include <iostream>
 #include <map>
+#include <cstdlib>  // Para rand() y srand()
+#include <ctime>    // Para time()
 
 using namespace std;
 
@@ -141,39 +143,47 @@ const float headRadius = 1.0f;
 const float impulseStrength = 2.0f;
 
 void updateBallImpulse(cv::Mat &target, float *output, b2World &world, Ball &ball, double deltaTime) {
-    int poses = 6;
+    int poses = 6; // Asumiendo que hay hasta 6 personas detectadas
     int width = target.size().width;
     int height = target.size().height;
 
+    // Índices de keypoints para cabeza y muñecas (ajustar según tu modelo específico)
+    const int headIndex = 0;
+    const int leftWristIndex = 9;
+    const int rightWristIndex = 10;
+
     for (int p = 0; p < poses; p++) {
-        float *pose = output + (56 * p);
-        float score = pose[55];
+        float *pose = output + (56 * p);  // Asumiendo que cada pose tiene 56 valores (17 keypoints * 3 valores cada uno + 5 adicionales)
+        float score = pose[55];  // Score de detección de la pose
         if (score < poseThreshold) continue;
 
-        float y = pose[0] * height;
-        float x = pose[1] * width;
+        // Procesar la cabeza y ambas muñecas
+        std::vector<int> indices = {headIndex, leftWristIndex, rightWristIndex};
+        for (int index : indices) {
+            float y = pose[3 * index] * height;
+            float x = pose[3 * index + 1] * width;
+            cv::Point2f currentPosition(x, y);
 
-        cv::Point2f currentHeadPosition(x, y);
-        int personId = p;
-        if (previousHeadPositions.find(personId) != previousHeadPositions.end()) {
-            cv::Point2f prevPosition = previousHeadPositions[personId];
-            cv::Point2f velocity = (currentHeadPosition - prevPosition) / static_cast<float>(deltaTime);
+            int key = p * 100 + index;  // clave única para cada persona y cada parte del cuerpo
+            if (previousHeadPositions.find(key) != previousHeadPositions.end()) {
+                cv::Point2f prevPosition = previousHeadPositions[key];
+                cv::Point2f velocity = (currentPosition - prevPosition) / static_cast<float>(deltaTime);
 
-            b2Vec2 ballPosition = ball.getPosition();
-            ballPosition.x *= WORLD_SCALE;
-            ballPosition.y *= WORLD_SCALE;
+                b2Vec2 ballPosition = ball.getPosition();
+                ballPosition.x *= WORLD_SCALE;
+                ballPosition.y *= WORLD_SCALE;
 
-            float distance = cv::norm(currentHeadPosition - cv::Point2f(ballPosition.x, ballPosition.y));
-            if (distance < headRadius * WORLD_SCALE) {
-                b2Vec2 impulse(velocity.x / WORLD_SCALE, velocity.y / WORLD_SCALE);
-                b2Vec2 impulseForce(impulse.x * impulseStrength, -6.0);
-                ball.impulse(impulseForce);
+                float distance = cv::norm(currentPosition - cv::Point2f(ballPosition.x, ballPosition.y));
+                if (distance < headRadius * WORLD_SCALE) {
+                    b2Vec2 impulse(velocity.x / WORLD_SCALE, velocity.y / WORLD_SCALE);
+                    b2Vec2 impulseForce(impulse.x * impulseStrength, -6.0);
+                    ball.impulse(impulseForce);
+                }
             }
+            previousHeadPositions[key] = currentPosition;
         }
-        previousHeadPositions[personId] = currentHeadPosition;
     }
 }
-
 
 int main() {
     bool multiPose;
@@ -260,8 +270,10 @@ int main() {
         return -1;
     }
 
-    auto time = chrono::steady_clock::now();
+    auto _time = chrono::steady_clock::now();
     double avgFrameMs = 1000.0 / 30.0;
+    srand(time(NULL));
+
     while (true) {
         cap >> frame;
         if (frame.empty()) {
@@ -273,15 +285,20 @@ int main() {
 
         float *results = runInterpreter(interpreter, resized);
         auto now = chrono::steady_clock::now();
-        auto frameMs = chrono::duration_cast<chrono::milliseconds>(now - time).count();
-        time = now;
+        auto frameMs = chrono::duration_cast<chrono::milliseconds>(now - _time).count();
+        _time = now;
         avgFrameMs += 0.05 * (frameMs - avgFrameMs);
         drawKeypoints(cropped, results, poses, avgFrameMs);
         ball.render(cropped);
+
         if (ball.getPosition().y > (float) cropped.cols / WORLD_SCALE ||
-            ball.getPosition().x<0.0 || ball.getPosition().x>(float)
-            cropped.rows / WORLD_SCALE) {
-            ball.setPosition(b2Vec2(320.0f / WORLD_SCALE, 50.0f / WORLD_SCALE));
+            ball.getPosition().x < 0.0 || ball.getPosition().x > (float)cropped.rows / WORLD_SCALE) {
+            // Calcular un valor aleatorio entre el 20% y el 80% del ancho de la imagen
+            float randomX = 0.2f * cropped.cols + static_cast<float>(rand()) / RAND_MAX * (0.6f * cropped.cols);
+
+            // Convertir a unidades de Box2D (WORLD_SCALE)
+            b2Vec2 newPosition(randomX / WORLD_SCALE, 0.0f / WORLD_SCALE);
+            ball.setPosition(newPosition);
         }
         updateBallImpulse(cropped, results, world, ball, frameMs / 1000.0);
         world.Step(frameMs / 1000.0, 8, 3);
