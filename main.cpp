@@ -5,6 +5,7 @@
 // - Displays the full-resolution frame (resized to window size) using SDL2 and OpenGL.
 // - Draws persistent pose keypoints and connections.
 // - Overlays separate suit-part textures (face, torso, left arm, right arm) on each detected person.
+//   For the arms, the texture is rotated to align with the vector from shoulder to elbow.
 // - The input source is specified via a command-line argument (default "0" for webcam).
 // - The SDL window is sized based on the input resolution but limited to the desktop dimensions.
 
@@ -60,7 +61,7 @@ class PoseTracker {
 public:
     PoseTracker() : nextId(0) {}
 
-    // Computes centers for valid poses and assigns persistent IDs by nearest-neighbor matching.
+    // Compute centers for valid poses and assign persistent IDs using nearest neighbor.
     vector<int> trackPoses(const float* output, int numPoses, int inpWidth, int inpHeight,
                            float poseThreshold, float keypointThreshold) {
         vector<PoseData> currentPoses;
@@ -123,7 +124,7 @@ private:
 };
 
 //------------------------------------------------------------
-// MaskTexture struct: holds an OpenGL texture ID and its original dimensions.
+// MaskTexture: holds an OpenGL texture ID and its original dimensions.
 //------------------------------------------------------------
 struct MaskTexture {
     GLuint textureID;
@@ -132,10 +133,10 @@ struct MaskTexture {
 };
 
 //------------------------------------------------------------
-// loadMaskTexture: loads an image file (with alpha) into an OpenGL texture and stores its dimensions.
+// loadMaskTexture: loads an image file (with alpha) into an OpenGL texture.
 //------------------------------------------------------------
 MaskTexture loadMaskTexture(const string& filename) {
-    Mat img = imread(filename, IMREAD_UNCHANGED); // load with alpha
+    Mat img = imread(filename, IMREAD_UNCHANGED);
     if (img.empty())
         throw runtime_error("Failed to load mask image: " + filename);
     if (img.channels() == 4)
@@ -153,8 +154,7 @@ MaskTexture loadMaskTexture(const string& filename) {
 }
 
 //------------------------------------------------------------
-// drawTextureRect: draws a textured quad centered at (centerX, centerY)
-// with the specified width and height, using the provided texture.
+// drawTextureRect: draws a textured quad (non-rotated).
 //------------------------------------------------------------
 void drawTextureRect(float centerX, float centerY, float width, float height, const MaskTexture &tex) {
     float halfW = width / 2.0f;
@@ -173,6 +173,29 @@ void drawTextureRect(float centerX, float centerY, float width, float height, co
 }
 
 //------------------------------------------------------------
+// drawRotatedTextureRect: draws a textured quad rotated by a given angle.
+//------------------------------------------------------------
+void drawRotatedTextureRect(float centerX, float centerY, float width, float height, float angle, const MaskTexture &tex) {
+    float halfW = width / 2.0f;
+    float halfH = height / 2.0f;
+    glPushMatrix();
+    glTranslatef(centerX, centerY, 0);
+    glRotatef(angle, 0, 0, 1); // Rotate around Z-axis
+    glColor3f(1.0f, 1.0f, 1.0f);
+    glBindTexture(GL_TEXTURE_2D, tex.textureID);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBegin(GL_QUADS);
+    glTexCoord2f(0.0f, 0.0f); glVertex2f(-halfW, -halfH);
+    glTexCoord2f(1.0f, 0.0f); glVertex2f(halfW, -halfH);
+    glTexCoord2f(1.0f, 1.0f); glVertex2f(halfW, halfH);
+    glTexCoord2f(0.0f, 1.0f); glVertex2f(-halfW, halfH);
+    glEnd();
+    glDisable(GL_BLEND);
+    glPopMatrix();
+}
+
+//------------------------------------------------------------
 // SuitTextures: holds textures for different suit parts.
 //------------------------------------------------------------
 struct SuitTextures {
@@ -184,11 +207,11 @@ struct SuitTextures {
 
 //------------------------------------------------------------
 // drawSuitOverlayForPose: overlays suit parts on one detected pose.
-// The keypoints in the pose are scaled from the inference resolution (192x192)
+// The keypoints are assumed to be scaled from the inference resolution (192x192)
 // using scaleX and scaleY (which map to display coordinates).
 //------------------------------------------------------------
 void drawSuitOverlayForPose(const float* pose, float scaleX, float scaleY, const SuitTextures &suit) {
-    // Face overlay: use nose (index 0), left ear (3) and right ear (4)
+    // Face overlay: use left ear (index 3) and right ear (index 4), fallback to nose (index 0)
     const float* nose = pose; // index 0
     const float* leftEar = pose + 3 * 3;
     const float* rightEar = pose + 3 * 4;
@@ -235,11 +258,12 @@ void drawSuitOverlayForPose(const float* pose, float scaleX, float scaleY, const
         float y1 = leftShoulder[0] * 192 * scaleY;
         float x2 = leftElbow[1] * 192 * scaleX;
         float y2 = leftElbow[0] * 192 * scaleY;
-        float armWidth = norm(Point2f(x1, y1) - Point2f(x2, y2));
-        float armHeight = armWidth * (suit.leftArm.height / static_cast<float>(suit.leftArm.width));
+        float armLength = norm(Point2f(x2, y2) - Point2f(x1, y1));
+        float armHeight = armLength * (suit.leftArm.height / static_cast<float>(suit.leftArm.width));
         float centerX = (x1 + x2) / 2.0f;
         float centerY = (y1 + y2) / 2.0f;
-        drawTextureRect(centerX, centerY, armWidth, armHeight, suit.leftArm);
+        float angle = atan2(y2 - y1, x2 - x1) * 180.0f / CV_PI;
+        drawRotatedTextureRect(centerX, centerY, armLength, armHeight, angle, suit.leftArm);
     }
 
     // Right arm overlay: use right shoulder (6) and right elbow (8)
@@ -249,11 +273,12 @@ void drawSuitOverlayForPose(const float* pose, float scaleX, float scaleY, const
         float y1 = rightShoulder[0] * 192 * scaleY;
         float x2 = rightElbow[1] * 192 * scaleX;
         float y2 = rightElbow[0] * 192 * scaleY;
-        float armWidth = norm(Point2f(x1, y1) - Point2f(x2, y2));
-        float armHeight = armWidth * (suit.rightArm.height / static_cast<float>(suit.rightArm.width));
+        float armLength = norm(Point2f(x2, y2) - Point2f(x1, y1));
+        float armHeight = armLength * (suit.rightArm.height / static_cast<float>(suit.rightArm.width));
         float centerX = (x1 + x2) / 2.0f;
         float centerY = (y1 + y2) / 2.0f;
-        drawTextureRect(centerX, centerY, armWidth, armHeight, suit.rightArm);
+        float angle = atan2(y2 - y1, x2 - x1) * 180.0f / CV_PI;
+        drawRotatedTextureRect(centerX, centerY, armLength, armHeight, angle, suit.rightArm);
     }
 }
 
@@ -290,7 +315,7 @@ private:
 };
 
 //------------------------------------------------------------
-// PoseEstimator: loads and runs the TFLite multipose model and draws pose overlays.
+// PoseEstimator: loads and runs the TFLite multipose model and draws pose overlays with suit parts.
 //------------------------------------------------------------
 class PoseEstimator {
 public:
@@ -319,9 +344,9 @@ public:
             cerr << "Inference failed" << endl;
         return interpreter->typed_output_tensor<float>(0);
     }
-    // Draw pose keypoints, connections, and overlay suit textures.
+    // Draw poses, connections, and overlay suit textures.
     // displayImage: full-resolution image (resized to window size).
-    // suit: SuitTextures structure with suit-part textures.
+    // suit: SuitTextures structure.
     void drawPosesGL(const Mat &displayImage, float* output, const SuitTextures &suit) {
         int dispWidth = displayImage.cols;
         int dispHeight = displayImage.rows;
@@ -329,7 +354,7 @@ public:
         float scaleY = static_cast<float>(dispHeight) / static_cast<float>(inputHeight);
         int numPoses = interpreter->tensor(interpreter->outputs()[0])->dims->data[1];
 
-        // Optionally draw keypoints and connections (this code remains as before)
+        // Optionally draw keypoints and connections.
         glPointSize(8.0f);
         glBegin(GL_POINTS);
         for (int p = 0; p < numPoses; p++) {
@@ -337,7 +362,7 @@ public:
             float score = pose[55];
             if (score < poseThreshold)
                 continue;
-            int id = p; // For keypoint color, you might use persistent IDs
+            int id = p; // For now, using index as persistent ID.
             Scalar poseColor = g_colors[id % g_colors.size()];
             glColor3f(poseColor[2] / 255.0f, poseColor[1] / 255.0f, poseColor[0] / 255.0f);
             for (int k = 0; k < 17; k++) {
@@ -376,7 +401,7 @@ public:
         }
         glEnd();
 
-        // For each detected pose, overlay the suit parts.
+        // For each detected pose, overlay suit parts.
         for (int p = 0; p < numPoses; p++) {
             const float* pose = output + (56 * p);
             if (pose[55] < poseThreshold)
