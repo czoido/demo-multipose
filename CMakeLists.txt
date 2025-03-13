@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.26)
 project(webcam_multipose)
 
-find_package(box2d)
-find_package(tensorflowlite)
-find_package(OpenCV)
+find_package(box2d REQUIRED CONFIG)
+find_package(tensorflowlite REQUIRED CONFIG)
+find_package(OpenCV REQUIRED CONFIG)
 find_package(SDL2 REQUIRED CONFIG)
 find_package(opengl_system REQUIRED CONFIG)
 
