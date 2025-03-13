@@ -7,8 +7,13 @@ find_package(OpenCV)
 find_package(SDL2 REQUIRED CONFIG)
 find_package(opengl_system REQUIRED CONFIG)
 
-add_executable(webcam_multipose main.cpp
-        ball.cpp
-        ball.h)
+add_executable(webcam_multipose
+        src/main.cpp
+        src/PoseTracker.cpp
+        src/SuitOverlay.cpp
+        src/VideoInputWrapper.cpp
+        src/PoseEstimator.cpp
+        src/OpenGLRenderer.cpp
+)
 
 target_link_libraries(webcam_multipose tensorflow::tensorflowlite opencv::opencv box2d::box2d SDL2::SDL2main SDL2::SDL2-static opengl::opengl)
