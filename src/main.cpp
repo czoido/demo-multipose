@@ -46,16 +46,16 @@ int main(int argc, char* argv[]) {
 
         // Load suit textures.
         SuitImages suit;
-        suit.face = loadSuitTexture("../face.png");
-        suit.torso = loadSuitTexture("../torso.png");
-        suit.leftArm = loadSuitTexture("../left_arm.png");
-        suit.rightArm = loadSuitTexture("../right_arm.png");
-        suit.leftForearm = loadSuitTexture("../left_forearm.png");
-        suit.rightForearm = loadSuitTexture("../right_forearm.png");
-        suit.leftLeg = loadSuitTexture("../left_leg.png");
-        suit.rightLeg = loadSuitTexture("../right_leg.png");
-        suit.leftLowerLeg = loadSuitTexture("../left_lower_leg.png");
-        suit.rightLowerLeg = loadSuitTexture("../right_lower_leg.png");
+        suit.face = loadSuitTexture("../assets/face.png");
+        suit.torso = loadSuitTexture("../assets/torso.png");
+        suit.leftArm = loadSuitTexture("../assets/left_arm.png");
+        suit.rightArm = loadSuitTexture("../assets/right_arm.png");
+        suit.leftForearm = loadSuitTexture("../assets/left_forearm.png");
+        suit.rightForearm = loadSuitTexture("../assets/right_forearm.png");
+        suit.leftLeg = loadSuitTexture("../assets/left_leg.png");
+        suit.rightLeg = loadSuitTexture("../assets/right_leg.png");
+        suit.leftLowerLeg = loadSuitTexture("../assets/left_lower_leg.png");
+        suit.rightLowerLeg = loadSuitTexture("../assets/right_lower_leg.png");
 
         // Define scale factors.
         SuitScaleFactors scales;
@@ -70,7 +70,7 @@ int main(int argc, char* argv[]) {
         scales.leftLowerLeg = 1.0f;
         scales.rightLowerLeg = 1.0f;
 
-        string modelPath = "../lite-model_movenet_multipose_lightning_tflite_float16_4.tflite";
+        string modelPath = "../assets/lite-model_movenet_multipose_lightning_tflite_float16_4.tflite";
         PoseEstimator poseEstimator(modelPath, true, 192, 192);
 
         bool drawKeypoints = false;
