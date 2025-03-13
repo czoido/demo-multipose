@@ -237,6 +237,7 @@ public:
 
     // Render a textured quad covering the entire window.
     void renderQuad() {
+        glColor3f(1.0,1.0,1.0);
         glBegin(GL_QUADS);
         glTexCoord2f(0.0f, 0.0f); glVertex2f(0, 0);
         glTexCoord2f(1.0f, 0.0f); glVertex2f(windowWidth, 0);
