@@ -1,13 +1,13 @@
-// main_multipose_suit.cpp
-// Multipose tracking with suit overlay (face, torso, arms).
-// - Captures full-resolution frames from a video source (webcam or file).
+// main_multipose_suit_complete.cpp
+// Multipose tracking with complete suit overlay.
+// - Captures full‑resolution frames from a video source (webcam or file).
 // - Resizes a copy to 192x192 for TFLite multipose inference.
-// - Displays the full-resolution frame (resized to window size) using SDL2 and OpenGL.
+// - Displays the full‑resolution frame (resized to window size) using SDL2 and OpenGL.
 // - Draws persistent pose keypoints and connections.
-// - Overlays separate suit-part textures (face, torso, left arm, right arm) on each detected person.
-//   For the arms, the texture is rotated to align with the vector from shoulder to elbow.
-// - The input source is specified via a command-line argument (default "0" for webcam).
+// - Overlays separate suit‑part textures (face, torso, arms, forearms, legs) on each detected person.
+// - The input source is specified via a command‑line argument (default "0" for webcam).
 // - The SDL window is sized based on the input resolution but limited to the desktop dimensions.
+// All comments are in English.
 
 #include <opencv2/opencv.hpp>
 #include <tensorflow/lite/model.h>
@@ -61,7 +61,8 @@ class PoseTracker {
 public:
     PoseTracker() : nextId(0) {}
 
-    // Compute centers for valid poses and assign persistent IDs using nearest neighbor.
+    // For each valid pose, compute the center from all keypoints and then use nearest-neighbor
+    // matching with the previous frame to assign a persistent ID.
     vector<int> trackPoses(const float* output, int numPoses, int inpWidth, int inpHeight,
                            float poseThreshold, float keypointThreshold) {
         vector<PoseData> currentPoses;
@@ -86,6 +87,7 @@ public:
                 currentPoses.push_back({-1, center});
             }
         }
+
         vector<bool> used(prevPoses.size(), false);
         for (auto &curr : currentPoses) {
             float bestDist = numeric_limits<float>::max();
@@ -154,7 +156,7 @@ MaskTexture loadMaskTexture(const string& filename) {
 }
 
 //------------------------------------------------------------
-// drawTextureRect: draws a textured quad (non-rotated).
+// drawTextureRect: draws a textured quad without rotation.
 //------------------------------------------------------------
 void drawTextureRect(float centerX, float centerY, float width, float height, const MaskTexture &tex) {
     float halfW = width / 2.0f;
@@ -173,14 +175,14 @@ void drawTextureRect(float centerX, float centerY, float width, float height, co
 }
 
 //------------------------------------------------------------
-// drawRotatedTextureRect: draws a textured quad rotated by a given angle.
+// drawRotatedTextureRect: draws a textured quad rotated by angle (in degrees).
 //------------------------------------------------------------
 void drawRotatedTextureRect(float centerX, float centerY, float width, float height, float angle, const MaskTexture &tex) {
     float halfW = width / 2.0f;
     float halfH = height / 2.0f;
     glPushMatrix();
     glTranslatef(centerX, centerY, 0);
-    glRotatef(angle, 0, 0, 1); // Rotate around Z-axis
+    glRotatef(angle, 0, 0, 1);
     glColor3f(1.0f, 1.0f, 1.0f);
     glBindTexture(GL_TEXTURE_2D, tex.textureID);
     glEnable(GL_BLEND);
@@ -196,94 +198,23 @@ void drawRotatedTextureRect(float centerX, float centerY, float width, float hei
 }
 
 //------------------------------------------------------------
-// SuitTextures: holds textures for different suit parts.
+// SuitTextures: holds textures for various suit parts.
 //------------------------------------------------------------
 struct SuitTextures {
     MaskTexture face;
     MaskTexture torso;
     MaskTexture leftArm;
     MaskTexture rightArm;
+    MaskTexture leftForearm;
+    MaskTexture rightForearm;
+    MaskTexture leftLeg;
+    MaskTexture rightLeg;
+    MaskTexture leftLowerLeg;
+    MaskTexture rightLowerLeg;
 };
 
 //------------------------------------------------------------
-// drawSuitOverlayForPose: overlays suit parts on one detected pose.
-// The keypoints are assumed to be scaled from the inference resolution (192x192)
-// using scaleX and scaleY (which map to display coordinates).
-//------------------------------------------------------------
-void drawSuitOverlayForPose(const float* pose, float scaleX, float scaleY, const SuitTextures &suit) {
-    // Face overlay: use left ear (index 3) and right ear (index 4), fallback to nose (index 0)
-    const float* nose = pose; // index 0
-    const float* leftEar = pose + 3 * 3;
-    const float* rightEar = pose + 3 * 4;
-    if (leftEar[2] >= keypointThreshold && rightEar[2] >= keypointThreshold) {
-        float x_left = leftEar[1] * 192 * scaleX;
-        float y_left = leftEar[0] * 192 * scaleY;
-        float x_right = rightEar[1] * 192 * scaleX;
-        float y_right = rightEar[0] * 192 * scaleY;
-        float faceWidth = norm(Point2f(x_left, y_left) - Point2f(x_right, y_right));
-        float faceHeight = faceWidth * (suit.face.height / static_cast<float>(suit.face.width));
-        float centerX = (x_left + x_right) / 2.0f;
-        float centerY = (y_left + y_right) / 2.0f;
-        drawTextureRect(centerX, centerY, faceWidth, faceHeight, suit.face);
-    } else if (nose[2] >= keypointThreshold) {
-        float centerX = nose[1] * 192 * scaleX;
-        float centerY = nose[0] * 192 * scaleY;
-        float faceWidth = 80.0f;
-        float faceHeight = faceWidth * (suit.face.height / static_cast<float>(suit.face.width));
-        drawTextureRect(centerX, centerY, faceWidth, faceHeight, suit.face);
-    }
-
-    // Torso overlay: use left shoulder (5), right shoulder (6), left hip (11), right hip (12)
-    const float* leftShoulder = pose + 3 * 5;
-    const float* rightShoulder = pose + 3 * 6;
-    const float* leftHip = pose + 3 * 11;
-    const float* rightHip = pose + 3 * 12;
-    if (leftShoulder[2] >= keypointThreshold && rightShoulder[2] >= keypointThreshold &&
-        leftHip[2] >= keypointThreshold && rightHip[2] >= keypointThreshold) {
-        float x1 = min({leftShoulder[1], rightShoulder[1], leftHip[1], rightHip[1]}) * 192 * scaleX;
-        float y1 = min({leftShoulder[0], rightShoulder[0], leftHip[0], rightHip[0]}) * 192 * scaleY;
-        float x2 = max({leftShoulder[1], rightShoulder[1], leftHip[1], rightHip[1]}) * 192 * scaleX;
-        float y2 = max({leftShoulder[0], rightShoulder[0], leftHip[0], rightHip[0]}) * 192 * scaleY;
-        float torsoWidth = x2 - x1;
-        float torsoHeight = y2 - y1;
-        float centerX = (x1 + x2) / 2.0f;
-        float centerY = (y1 + y2) / 2.0f;
-        drawTextureRect(centerX, centerY, torsoWidth, torsoHeight, suit.torso);
-    }
-
-    // Left arm overlay: use left shoulder (5) and left elbow (7)
-    const float* leftElbow = pose + 3 * 7;
-    if (leftShoulder[2] >= keypointThreshold && leftElbow[2] >= keypointThreshold) {
-        float x1 = leftShoulder[1] * 192 * scaleX;
-        float y1 = leftShoulder[0] * 192 * scaleY;
-        float x2 = leftElbow[1] * 192 * scaleX;
-        float y2 = leftElbow[0] * 192 * scaleY;
-        float armLength = norm(Point2f(x2, y2) - Point2f(x1, y1));
-        float armHeight = armLength * (suit.leftArm.height / static_cast<float>(suit.leftArm.width));
-        float centerX = (x1 + x2) / 2.0f;
-        float centerY = (y1 + y2) / 2.0f;
-        float angle = atan2(y2 - y1, x2 - x1) * 180.0f / CV_PI;
-        drawRotatedTextureRect(centerX, centerY, armLength, armHeight, angle, suit.leftArm);
-    }
-
-    // Right arm overlay: use right shoulder (6) and right elbow (8)
-    const float* rightElbow = pose + 3 * 8;
-    if (rightShoulder[2] >= keypointThreshold && rightElbow[2] >= keypointThreshold) {
-        float x1 = rightShoulder[1] * 192 * scaleX;
-        float y1 = rightShoulder[0] * 192 * scaleY;
-        float x2 = rightElbow[1] * 192 * scaleX;
-        float y2 = rightElbow[0] * 192 * scaleY;
-        float armLength = norm(Point2f(x2, y2) - Point2f(x1, y1));
-        float armHeight = armLength * (suit.rightArm.height / static_cast<float>(suit.rightArm.width));
-        float centerX = (x1 + x2) / 2.0f;
-        float centerY = (y1 + y2) / 2.0f;
-        float angle = atan2(y2 - y1, x2 - x1) * 180.0f / CV_PI;
-        drawRotatedTextureRect(centerX, centerY, armLength, armHeight, angle, suit.rightArm);
-    }
-}
-
-//------------------------------------------------------------
-// VideoInputWrapper: wraps OpenCV VideoCapture for generic input (webcam or file).
+// VideoInputWrapper: wraps OpenCV VideoCapture for webcam or file input.
 //------------------------------------------------------------
 class VideoInputWrapper {
 public:
@@ -315,7 +246,7 @@ private:
 };
 
 //------------------------------------------------------------
-// PoseEstimator: loads and runs the TFLite multipose model and draws pose overlays with suit parts.
+// PoseEstimator: loads and runs the TFLite multipose model and draws pose overlays and suit textures.
 //------------------------------------------------------------
 class PoseEstimator {
 public:
@@ -344,9 +275,9 @@ public:
             cerr << "Inference failed" << endl;
         return interpreter->typed_output_tensor<float>(0);
     }
-    // Draw poses, connections, and overlay suit textures.
-    // displayImage: full-resolution image (resized to window size).
-    // suit: SuitTextures structure.
+    // Draws keypoints, connections, and overlays suit textures.
+    // displayImage: full‑resolution image (resized to window size).
+    // suit: SuitTextures structure with suit part textures.
     void drawPosesGL(const Mat &displayImage, float* output, const SuitTextures &suit) {
         int dispWidth = displayImage.cols;
         int dispHeight = displayImage.rows;
@@ -354,7 +285,10 @@ public:
         float scaleY = static_cast<float>(dispHeight) / static_cast<float>(inputHeight);
         int numPoses = interpreter->tensor(interpreter->outputs()[0])->dims->data[1];
 
-        // Optionally draw keypoints and connections.
+        // Get persistent pose IDs.
+        vector<int> poseIds = tracker.trackPoses(output, numPoses, inputWidth, inputHeight, poseThreshold, keypointThreshold);
+
+        // Draw keypoints.
         glPointSize(8.0f);
         glBegin(GL_POINTS);
         for (int p = 0; p < numPoses; p++) {
@@ -362,8 +296,8 @@ public:
             float score = pose[55];
             if (score < poseThreshold)
                 continue;
-            int id = p; // For now, using index as persistent ID.
-            Scalar poseColor = g_colors[id % g_colors.size()];
+            int id = poseIds[p];
+            Scalar poseColor = g_colors[(id >= 0 ? id : p) % g_colors.size()];
             glColor3f(poseColor[2] / 255.0f, poseColor[1] / 255.0f, poseColor[0] / 255.0f);
             for (int k = 0; k < 17; k++) {
                 const float* keypoint = pose + 3 * k;
@@ -376,6 +310,7 @@ public:
         }
         glEnd();
 
+        // Draw connections.
         glLineWidth(2.0f);
         glBegin(GL_LINES);
         for (int p = 0; p < numPoses; p++) {
@@ -383,8 +318,8 @@ public:
             float score = pose[55];
             if (score < poseThreshold)
                 continue;
-            int id = p;
-            Scalar poseColor = g_colors[id % g_colors.size()];
+            int id = poseIds[p];
+            Scalar poseColor = g_colors[(id >= 0 ? id : p) % g_colors.size()];
             glColor3f(poseColor[2] / 255.0f, poseColor[1] / 255.0f, poseColor[0] / 255.0f);
             for (const auto &conn : g_connections) {
                 const float* kp1 = pose + 3 * conn.first;
@@ -401,12 +336,165 @@ public:
         }
         glEnd();
 
-        // For each detected pose, overlay suit parts.
+        // For each pose, overlay suit parts.
         for (int p = 0; p < numPoses; p++) {
             const float* pose = output + (56 * p);
-            if (pose[55] < poseThreshold)
+            float score = pose[55];
+            if (score < poseThreshold)
                 continue;
-            drawSuitOverlayForPose(pose, scaleX, scaleY, suit);
+
+            // --- Face overlay ---
+            const float* nose = pose; // index 0
+            const float* leftEar = pose + 3 * 3;   // index 3
+            const float* rightEar = pose + 3 * 4;  // index 4
+            if (leftEar[2] >= keypointThreshold && rightEar[2] >= keypointThreshold) {
+                float x_left = leftEar[1] * inputWidth * scaleX;
+                float y_left = leftEar[0] * inputHeight * scaleY;
+                float x_right = rightEar[1] * inputWidth * scaleX;
+                float y_right = rightEar[0] * inputHeight * scaleY;
+                float faceWidth = norm(Point2f(x_left, y_left) - Point2f(x_right, y_right));
+                float faceHeight = faceWidth * (suit.face.height / static_cast<float>(suit.face.width));
+                float centerX = (x_left + x_right) / 2.0f;
+                float centerY = (y_left + y_right) / 2.0f;
+                drawTextureRect(centerX, centerY, faceWidth, faceHeight, suit.face);
+            } else if (nose[2] >= keypointThreshold) {
+                float centerX = nose[1] * inputWidth * scaleX;
+                float centerY = nose[0] * inputHeight * scaleY;
+                float faceWidth = 80.0f;
+                float faceHeight = faceWidth * (suit.face.height / static_cast<float>(suit.face.width));
+                drawTextureRect(centerX, centerY, faceWidth, faceHeight, suit.face);
+            }
+
+            // --- Torso overlay: from shoulders (5,6) to hips (11,12) ---
+            const float* leftShoulder = pose + 3 * 5;
+            const float* rightShoulder = pose + 3 * 6;
+            const float* leftHip = pose + 3 * 11;
+            const float* rightHip = pose + 3 * 12;
+            if (leftShoulder[2] >= keypointThreshold && rightShoulder[2] >= keypointThreshold &&
+                leftHip[2] >= keypointThreshold && rightHip[2] >= keypointThreshold) {
+                float x1 = min({leftShoulder[1], rightShoulder[1], leftHip[1], rightHip[1]}) * inputWidth * scaleX;
+                float y1 = min({leftShoulder[0], rightShoulder[0], leftHip[0], rightHip[0]}) * inputHeight * scaleY;
+                float x2 = max({leftShoulder[1], rightShoulder[1], leftHip[1], rightHip[1]}) * inputWidth * scaleX;
+                float y2 = max({leftShoulder[0], rightShoulder[0], leftHip[0], rightHip[0]}) * inputHeight * scaleY;
+                float torsoWidth = x2 - x1;
+                float torsoHeight = y2 - y1;
+                float centerX = (x1 + x2) / 2.0f;
+                float centerY = (y1 + y2) / 2.0f;
+                drawTextureRect(centerX, centerY, torsoWidth, torsoHeight, suit.torso);
+            }
+
+            // --- Left upper arm: shoulder (5) to elbow (7) ---
+            const float* leftElbow = pose + 3 * 7;
+            if (leftShoulder[2] >= keypointThreshold && leftElbow[2] >= keypointThreshold) {
+                float x1 = leftShoulder[1] * inputWidth * scaleX;
+                float y1 = leftShoulder[0] * inputHeight * scaleY;
+                float x2 = leftElbow[1] * inputWidth * scaleX;
+                float y2 = leftElbow[0] * inputHeight * scaleY;
+                float armLength = norm(Point2f(x2, y2) - Point2f(x1, y1));
+                float armHeight = armLength * (suit.leftArm.height / static_cast<float>(suit.leftArm.width));
+                float centerX = (x1 + x2) / 2.0f;
+                float centerY = (y1 + y2) / 2.0f;
+                float angle = atan2(y2 - y1, x2 - x1) * 180.0f / CV_PI;
+                drawRotatedTextureRect(centerX, centerY, armLength, armHeight, angle, suit.leftArm);
+            }
+            // --- Left forearm: elbow (7) to wrist (9) ---
+            const float* leftWrist = pose + 3 * 9;
+            if (leftElbow[2] >= keypointThreshold && leftWrist[2] >= keypointThreshold) {
+                float x1 = leftElbow[1] * inputWidth * scaleX;
+                float y1 = leftElbow[0] * inputHeight * scaleY;
+                float x2 = leftWrist[1] * inputWidth * scaleX;
+                float y2 = leftWrist[0] * inputHeight * scaleY;
+                float forearmLength = norm(Point2f(x2, y2) - Point2f(x1, y1));
+                float forearmHeight = forearmLength * (suit.leftForearm.height / static_cast<float>(suit.leftForearm.width));
+                float centerX = (x1 + x2) / 2.0f;
+                float centerY = (y1 + y2) / 2.0f;
+                float angle = atan2(y2 - y1, x2 - x1) * 180.0f / CV_PI;
+                drawRotatedTextureRect(centerX, centerY, forearmLength, forearmHeight, angle, suit.leftForearm);
+            }
+            // --- Right upper arm: shoulder (6) to elbow (8) ---
+            const float* rightElbow = pose + 3 * 8;
+            if (rightShoulder[2] >= keypointThreshold && rightElbow[2] >= keypointThreshold) {
+                float x1 = rightShoulder[1] * inputWidth * scaleX;
+                float y1 = rightShoulder[0] * inputHeight * scaleY;
+                float x2 = rightElbow[1] * inputWidth * scaleX;
+                float y2 = rightElbow[0] * inputHeight * scaleY;
+                float armLength = norm(Point2f(x2, y2) - Point2f(x1, y1));
+                float armHeight = armLength * (suit.rightArm.height / static_cast<float>(suit.rightArm.width));
+                float centerX = (x1 + x2) / 2.0f;
+                float centerY = (y1 + y2) / 2.0f;
+                float angle = atan2(y2 - y1, x2 - x1) * 180.0f / CV_PI;
+                drawRotatedTextureRect(centerX, centerY, armLength, armHeight, angle, suit.rightArm);
+            }
+            // --- Right forearm: elbow (8) to wrist (10) ---
+            const float* rightWrist = pose + 3 * 10;
+            if (rightElbow[2] >= keypointThreshold && rightWrist[2] >= keypointThreshold) {
+                float x1 = rightElbow[1] * inputWidth * scaleX;
+                float y1 = rightElbow[0] * inputHeight * scaleY;
+                float x2 = rightWrist[1] * inputWidth * scaleX;
+                float y2 = rightWrist[0] * inputHeight * scaleY;
+                float forearmLength = norm(Point2f(x2, y2) - Point2f(x1, y1));
+                float forearmHeight = forearmLength * (suit.rightForearm.height / static_cast<float>(suit.rightForearm.width));
+                float centerX = (x1 + x2) / 2.0f;
+                float centerY = (y1 + y2) / 2.0f;
+                float angle = atan2(y2 - y1, x2 - x1) * 180.0f / CV_PI;
+                drawRotatedTextureRect(centerX, centerY, forearmLength, forearmHeight, angle, suit.rightForearm);
+            }
+            // --- Left upper leg: hip (11) to knee (13) ---
+            const float* leftKnee = pose + 3 * 13;
+            if (leftHip[2] >= keypointThreshold && leftKnee[2] >= keypointThreshold) {
+                float x1 = leftHip[1] * inputWidth * scaleX;
+                float y1 = leftHip[0] * inputHeight * scaleY;
+                float x2 = leftKnee[1] * inputWidth * scaleX;
+                float y2 = leftKnee[0] * inputHeight * scaleY;
+                float legLength = norm(Point2f(x2, y2) - Point2f(x1, y1));
+                float legWidth = legLength * (suit.leftLeg.height / static_cast<float>(suit.leftLeg.width));
+                float centerX = (x1 + x2) / 2.0f;
+                float centerY = (y1 + y2) / 2.0f;
+                float angle = atan2(y2 - y1, x2 - x1) * 180.0f / CV_PI;
+                drawRotatedTextureRect(centerX, centerY, legLength, legWidth, angle, suit.leftLeg);
+            }
+            // --- Left lower leg: knee (13) to ankle (15) ---
+            const float* leftAnkle = pose + 3 * 15;
+            if (leftKnee[2] >= keypointThreshold && leftAnkle[2] >= keypointThreshold) {
+                float x1 = leftKnee[1] * inputWidth * scaleX;
+                float y1 = leftKnee[0] * inputHeight * scaleY;
+                float x2 = leftAnkle[1] * inputWidth * scaleX;
+                float y2 = leftAnkle[0] * inputHeight * scaleY;
+                float lowerLegLength = norm(Point2f(x2, y2) - Point2f(x1, y1));
+                float lowerLegWidth = lowerLegLength * (suit.leftLowerLeg.height / static_cast<float>(suit.leftLowerLeg.width));
+                float centerX = (x1 + x2) / 2.0f;
+                float centerY = (y1 + y2) / 2.0f;
+                float angle = atan2(y2 - y1, x2 - x1) * 180.0f / CV_PI;
+                drawRotatedTextureRect(centerX, centerY, lowerLegLength, lowerLegWidth, angle, suit.leftLowerLeg);
+            }
+            // --- Right upper leg: hip (12) to knee (14) ---
+            const float* rightKnee = pose + 3 * 14;
+            if (rightHip[2] >= keypointThreshold && rightKnee[2] >= keypointThreshold) {
+                float x1 = rightHip[1] * inputWidth * scaleX;
+                float y1 = rightHip[0] * inputHeight * scaleY;
+                float x2 = rightKnee[1] * inputWidth * scaleX;
+                float y2 = rightKnee[0] * inputHeight * scaleY;
+                float legLength = norm(Point2f(x2, y2) - Point2f(x1, y1));
+                float legWidth = legLength * (suit.rightLeg.height / static_cast<float>(suit.rightLeg.width));
+                float centerX = (x1 + x2) / 2.0f;
+                float centerY = (y1 + y2) / 2.0f;
+                float angle = atan2(y2 - y1, x2 - x1) * 180.0f / CV_PI;
+                drawRotatedTextureRect(centerX, centerY, legLength, legWidth, angle, suit.rightLeg);
+            }
+            // --- Right lower leg: knee (14) to ankle (16) ---
+            const float* rightAnkle = pose + 3 * 16;
+            if (rightKnee[2] >= keypointThreshold && rightAnkle[2] >= keypointThreshold) {
+                float x1 = rightKnee[1] * inputWidth * scaleX;
+                float y1 = rightKnee[0] * inputHeight * scaleY;
+                float x2 = rightAnkle[1] * inputWidth * scaleX;
+                float y2 = rightAnkle[0] * inputHeight * scaleY;
+                float lowerLegLength = norm(Point2f(x2, y2) - Point2f(x1, y1));
+                float lowerLegWidth = lowerLegLength * (suit.rightLowerLeg.height / static_cast<float>(suit.rightLowerLeg.width));
+                float centerX = (x1 + x2) / 2.0f;
+                float centerY = (y1 + y2) / 2.0f;
+                float angle = atan2(y2 - y1, x2 - x1) * 180.0f / CV_PI;
+                drawRotatedTextureRect(centerX, centerY, lowerLegLength, lowerLegWidth, angle, suit.rightLowerLeg);
+            }
         }
     }
 private:
@@ -421,7 +509,7 @@ private:
 };
 
 //------------------------------------------------------------
-// OpenGLRenderer: manages the SDL window and texture rendering using OpenGL.
+// OpenGLRenderer: manages the SDL window and texture rendering with OpenGL.
 //------------------------------------------------------------
 class OpenGLRenderer {
 public:
@@ -498,7 +586,7 @@ private:
 };
 
 //------------------------------------------------------------
-// Main function: sets up video input, TFLite inference, and OpenGL rendering with suit overlay.
+// Main: sets up video input, TFLite inference, and OpenGL rendering with suit overlay.
 //------------------------------------------------------------
 int main(int argc, char* argv[]) {
     try {
@@ -539,12 +627,18 @@ int main(int argc, char* argv[]) {
         // Create OpenGLRenderer.
         OpenGLRenderer renderer(windowW, windowH);
 
-        // Now that the GL context is active, load suit-part textures.
+        // Now that the GL context is active, load suit textures.
         SuitTextures suit;
         suit.face = loadMaskTexture("../suit_face.png");
         suit.torso = loadMaskTexture("../suit_torso.png");
         suit.leftArm = loadMaskTexture("../suit_left_arm.png");
         suit.rightArm = loadMaskTexture("../suit_right_arm.png");
+        suit.leftForearm = loadMaskTexture("../suit_left_forearm.png");
+        suit.rightForearm = loadMaskTexture("../suit_right_forearm.png");
+        suit.leftLeg = loadMaskTexture("../suit_left_leg.png");
+        suit.rightLeg = loadMaskTexture("../suit_right_leg.png");
+        suit.leftLowerLeg = loadMaskTexture("../suit_left_lower_leg.png");
+        suit.rightLowerLeg = loadMaskTexture("../suit_right_lower_leg.png");
 
         // Create PoseEstimator with inference resolution 192x192.
         string modelPath = "../lite-model_movenet_multipose_lightning_tflite_float16_4.tflite";
@@ -561,7 +655,6 @@ int main(int argc, char* argv[]) {
                 else if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_RESIZED)
                     renderer.updateViewport();
             }
-
             if (!videoInput.getFrame(fullFrame))
                 continue;
             // Mirror frame horizontally.
@@ -582,7 +675,7 @@ int main(int argc, char* argv[]) {
             renderer.updateTexture(rgbDispFrame);
             glClear(GL_COLOR_BUFFER_BIT);
             renderer.renderQuad();
-            // Draw pose overlays and suit-part overlays.
+            // Draw pose overlays and suit overlays.
             poseEstimator.drawPosesGL(dispFrame, output, suit);
             SDL_GL_SwapWindow(renderer.getWindow());
         }
