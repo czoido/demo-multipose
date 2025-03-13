@@ -51,25 +51,35 @@ const float keypointThreshold = 0.2f;
 //------------------------------------------------------------
 class VideoInput {
 public:
-    // The source parameter can be either a camera device index (as a string) or a video file path.
+    // The source parameter can be either a camera index (as string) or a file path.
     VideoInput(const string &source) {
         try {
             int device = stoi(source);
+            isCamera = true;
             cap.open(device);
         } catch (const exception &e) {
+            isCamera = false;
             cap.open(source);
         }
         if (!cap.isOpened())
             throw runtime_error("Failed to open video source: " + source);
     }
     // Get a full-resolution frame.
+    // If using a video file and the frame is empty, reset the video to the start.
     bool getFrame(Mat &frame) {
         cap >> frame;
+        if (frame.empty() && !isCamera) {
+            // Reset to the beginning for video files
+            cap.set(CAP_PROP_POS_FRAMES, 0);
+            cap >> frame;
+        }
         return !frame.empty();
     }
 private:
     VideoCapture cap;
+    bool isCamera;
 };
+
 
 //------------------------------------------------------------
 // PoseEstimator class: loads and runs the TFLite multipose model
