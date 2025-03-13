@@ -1,3 +1,13 @@
+// main_multipose.cpp
+// Multipose tracking example that uses persistent pose tracking.
+// - Captures full-resolution frames from a video input (webcam or file).
+// - Creates a small inference image (192x192) for TFLite multipose inference.
+// - Uses the full-resolution frame (resized to window size) for display.
+// - Draws pose keypoints and connections (persistent colors) over the display image.
+// - The input source is specified as a command-line argument (default is "0" for webcam).
+// - The SDL window is sized based on the input resolution but limited to the desktop size.
+// All comments are in English.
+
 #include <opencv2/opencv.hpp>
 #include <tensorflow/lite/model.h>
 #include <tensorflow/lite/interpreter.h>
@@ -11,6 +21,8 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <vector>
+#include <limits>
 
 using namespace std;
 using namespace cv;
@@ -35,12 +47,97 @@ const vector<pair<int, int>> g_connections = {
 const float poseThreshold = 0.2f;
 const float keypointThreshold = 0.2f;
 
-//------------------------------------------------------------
-// VideoInput class: wraps OpenCV VideoCapture for generic input.
-//------------------------------------------------------------
+//-------------------------
+// PoseTracker: assigns persistent IDs to poses.
+//-------------------------
+struct PoseData {
+    int id;
+    Point2f center;
+};
+
+class PoseTracker {
+public:
+    PoseTracker() : nextId(0) {}
+
+    // Given the output tensor data, number of poses, input resolution,
+    // and thresholds, compute each valid pose's center and assign persistent IDs.
+    vector<int> trackPoses(const float* output, int numPoses, int inpWidth, int inpHeight,
+                           float poseThreshold, float keypointThreshold) {
+        vector<PoseData> currentPoses;
+        vector<int> poseIndices; // Stores indices of valid poses.
+
+        // Extract centers for each pose.
+        for (int p = 0; p < numPoses; p++) {
+            const float* pose = output + (56 * p);
+            float score = pose[55];
+            if (score < poseThreshold)
+                continue;
+            Point2f center(0, 0);
+            int count = 0;
+            for (int k = 0; k < 17; k++) {
+                const float* kp = pose + 3 * k;
+                if (kp[2] < keypointThreshold)
+                    continue;
+                center.x += kp[1] * inpWidth;
+                center.y += kp[0] * inpHeight;
+                count++;
+            }
+            if (count > 0) {
+                center.x /= count;
+                center.y /= count;
+                currentPoses.push_back({-1, center});
+                poseIndices.push_back(p);
+            }
+        }
+
+        // Match current poses to previous poses using nearest-neighbor distance.
+        vector<bool> used(prevPoses.size(), false);
+        for (auto &curr : currentPoses) {
+            float bestDist = numeric_limits<float>::max();
+            int bestIdx = -1;
+            for (int i = 0; i < prevPoses.size(); i++) {
+                if (used[i])
+                    continue;
+                float dist = norm(curr.center - prevPoses[i].center);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestIdx = i;
+                }
+            }
+            // If a previous pose is found within a threshold, assign its id.
+            if (bestIdx != -1 && bestDist < 50.0f) {
+                curr.id = prevPoses[bestIdx].id;
+                used[bestIdx] = true;
+            } else {
+                curr.id = nextId++;
+            }
+        }
+        prevPoses = currentPoses;
+
+        // Build result vector: map each original pose index to its persistent id.
+        vector<int> result(numPoses, -1);
+        int j = 0;
+        for (int p = 0; p < numPoses; p++) {
+            const float* pose = output + (56 * p);
+            if (pose[55] < poseThreshold)
+                continue;
+            result[p] = currentPoses[j].id;
+            j++;
+        }
+        return result;
+    }
+
+private:
+    vector<PoseData> prevPoses;
+    int nextId;
+};
+
+//-------------------------
+// VideoInput: wraps OpenCV VideoCapture.
+//-------------------------
 class VideoInput {
 public:
-    // The source parameter can be either a camera index (as string) or a file path.
+    // The source parameter can be either a camera index (as a string) or a file path.
     VideoInput(const string &source) {
         try {
             int device = stoi(source);
@@ -62,11 +159,9 @@ public:
         }
         return !frame.empty();
     }
-    // Get input frame width.
     double getFrameWidth() const {
         return cap.get(CAP_PROP_FRAME_WIDTH);
     }
-    // Get input frame height.
     double getFrameHeight() const {
         return cap.get(CAP_PROP_FRAME_HEIGHT);
     }
@@ -75,12 +170,14 @@ private:
     bool isCamera;
 };
 
-//------------------------------------------------------------
-// PoseEstimator class: loads and runs the TFLite multipose model
-// and draws pose overlays scaled to a given display resolution.
-//------------------------------------------------------------
+//-------------------------
+// PoseEstimator: loads and runs the TFLite multipose model and draws pose overlays.
+//-------------------------
 class PoseEstimator {
 public:
+    // modelPath: path to the TFLite model.
+    // multiPose: whether to use multipose.
+    // inpWidth/inpHeight: inference resolution.
     PoseEstimator(const string &modelPath, bool multiPose = true, int inpWidth = 192, int inpHeight = 192)
             : multiPose(multiPose), inputWidth(inpWidth), inputHeight(inpHeight),
               poseThreshold(0.2f), keypointThreshold(0.2f)
@@ -99,6 +196,7 @@ public:
                 throw runtime_error("Failed to reallocate tensors");
         }
     }
+    // Run inference on a small (inpWidth x inpHeight) image.
     float* runInference(const Mat &inferenceImage) {
         memcpy(interpreter->typed_input_tensor<unsigned char>(0), inferenceImage.data,
                inferenceImage.total() * inferenceImage.elemSize());
@@ -106,6 +204,9 @@ public:
             cerr << "Inference failed" << endl;
         return interpreter->typed_output_tensor<float>(0);
     }
+    // Draw pose keypoints and connections using OpenGL.
+    // displayImage: full-resolution image (resized to window size).
+    // The keypoints output is relative to the inference resolution.
     void drawPosesGL(const Mat &displayImage, float* output) {
         int dispWidth = displayImage.cols;
         int dispHeight = displayImage.rows;
@@ -113,17 +214,22 @@ public:
         float scaleY = static_cast<float>(dispHeight) / static_cast<float>(inputHeight);
         int numPoses = interpreter->tensor(interpreter->outputs()[0])->dims->data[1];
 
+        // Obtain persistent pose IDs.
+        vector<int> poseIds = tracker.trackPoses(output, numPoses, inputWidth, inputHeight, poseThreshold, keypointThreshold);
+
+        // Draw keypoints.
         glPointSize(8.0f);
         glBegin(GL_POINTS);
         for (int p = 0; p < numPoses; p++) {
-            float* pose = output + (56 * p);
+            const float* pose = output + (56 * p);
             float score = pose[55];
             if (score < poseThreshold)
                 continue;
-            Scalar poseColor = g_colors[p % g_colors.size()];
+            int id = poseIds[p];
+            Scalar poseColor = g_colors[(id >= 0 ? id : p) % g_colors.size()];
             glColor3f(poseColor[2] / 255.0f, poseColor[1] / 255.0f, poseColor[0] / 255.0f);
             for (int k = 0; k < 17; k++) {
-                float* keypoint = pose + 3 * k;
+                const float* keypoint = pose + 3 * k;
                 if (keypoint[2] < keypointThreshold)
                     continue;
                 float x = keypoint[1] * inputWidth * scaleX;
@@ -133,18 +239,20 @@ public:
         }
         glEnd();
 
+        // Draw connections.
         glLineWidth(2.0f);
         glBegin(GL_LINES);
         for (int p = 0; p < numPoses; p++) {
-            float* pose = output + (56 * p);
+            const float* pose = output + (56 * p);
             float score = pose[55];
             if (score < poseThreshold)
                 continue;
-            Scalar poseColor = g_colors[p % g_colors.size()];
+            int id = poseIds[p];
+            Scalar poseColor = g_colors[(id >= 0 ? id : p) % g_colors.size()];
             glColor3f(poseColor[2] / 255.0f, poseColor[1] / 255.0f, poseColor[0] / 255.0f);
             for (const auto &conn : g_connections) {
-                float* kp1 = pose + 3 * conn.first;
-                float* kp2 = pose + 3 * conn.second;
+                const float* kp1 = pose + 3 * conn.first;
+                const float* kp2 = pose + 3 * conn.second;
                 if (kp1[2] < keypointThreshold || kp2[2] < keypointThreshold)
                     continue;
                 float x1 = kp1[1] * inputWidth * scaleX;
@@ -157,6 +265,7 @@ public:
         }
         glEnd();
     }
+
 private:
     unique_ptr<tflite::FlatBufferModel> model;
     unique_ptr<tflite::Interpreter> interpreter;
@@ -165,11 +274,12 @@ private:
     int inputHeight;
     const float poseThreshold;
     const float keypointThreshold;
+    PoseTracker tracker;
 };
 
-//------------------------------------------------------------
-// OpenGLRenderer class: handles SDL2 window and OpenGL texture rendering.
-//------------------------------------------------------------
+//-------------------------
+// OpenGLRenderer: handles SDL2 window and OpenGL texture rendering.
+//-------------------------
 class OpenGLRenderer {
 public:
     OpenGLRenderer(int initialWidth, int initialHeight)
@@ -194,16 +304,15 @@ public:
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        // Allocate texture storage using current window size.
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, windowWidth, windowHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
     }
-
     ~OpenGLRenderer() {
         glDeleteTextures(1, &textureID);
         SDL_GL_DeleteContext(glContext);
         SDL_DestroyWindow(window);
         SDL_Quit();
     }
-
     void updateViewport() {
         SDL_GetWindowSize(window, &windowWidth, &windowHeight);
         glViewport(0, 0, windowWidth, windowHeight);
@@ -213,7 +322,6 @@ public:
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
     }
-
     void updateTexture(const Mat &frame) {
         glBindTexture(GL_TEXTURE_2D, textureID);
         if (frame.cols != textureWidth || frame.rows != textureHeight) {
@@ -225,9 +333,8 @@ public:
         }
         glFlush();
     }
-
     void renderQuad() {
-        glColor3f(1.0f, 1.0f, 1.0f); // White color for texture.
+        glColor3f(1.0f, 1.0f, 1.0f); // Set color to white.
         glBegin(GL_QUADS);
         glTexCoord2f(0.0f, 0.0f); glVertex2f(0, 0);
         glTexCoord2f(1.0f, 0.0f); glVertex2f(windowWidth, 0);
@@ -235,11 +342,9 @@ public:
         glTexCoord2f(0.0f, 1.0f); glVertex2f(0, windowHeight);
         glEnd();
     }
-
     SDL_Window* getWindow() { return window; }
     int getWidth() const { return windowWidth; }
     int getHeight() const { return windowHeight; }
-
 private:
     SDL_Window* window;
     SDL_GLContext glContext;
@@ -250,13 +355,9 @@ private:
     int textureHeight;
 };
 
-//------------------------------------------------------------
-// Main function: integrates full-resolution capture,
-// inference on a small image, and scaled display with pose overlay.
-// The input source is selected via a command-line argument.
-// The SDL window is initialized to the input resolution, limited
-// by the desktop resolution.
-//------------------------------------------------------------
+//-------------------------
+// Main function.
+//-------------------------
 int main(int argc, char* argv[]) {
     try {
         // Initialize SDL video subsystem.
@@ -264,16 +365,14 @@ int main(int argc, char* argv[]) {
             throw runtime_error(string("SDL_Init Error: ") + SDL_GetError());
         }
 
-        // Default source is "0" (webcam device 0).
+        // Default source is "0" (webcam device 0); can be overridden via command-line.
         string source = "0";
         if (argc > 1) {
             source = argv[1];
         }
-
-        // Create video input instance.
         VideoInput videoInput(source);
 
-        // Obtain input resolution.
+        // Get input resolution.
         int inputW = static_cast<int>(videoInput.getFrameWidth());
         int inputH = static_cast<int>(videoInput.getFrameHeight());
         cout << "Input resolution: " << inputW << "x" << inputH << endl;
@@ -287,25 +386,22 @@ int main(int argc, char* argv[]) {
         int desktopH = dm.h;
         cout << "Desktop resolution: " << desktopW << "x" << desktopH << endl;
 
-        // Calculate scaling factor to limit window size.
+        // Compute scaling factor to limit window size to desktop dimensions.
         float scaleFactor = min(1.0f, min(static_cast<float>(desktopW) / inputW, static_cast<float>(desktopH) / inputH));
         int windowW = static_cast<int>(inputW * scaleFactor);
         int windowH = static_cast<int>(inputH * scaleFactor);
         cout << "Window resolution: " << windowW << "x" << windowH << endl;
 
-        // Create PoseEstimator.
+        // Create PoseEstimator using a small inference size (192x192).
         string modelPath = "../lite-model_movenet_multipose_lightning_tflite_float16_4.tflite";
         PoseEstimator poseEstimator(modelPath, true, 192, 192);
 
-        // Create OpenGLRenderer with computed window resolution.
+        // Create OpenGLRenderer with the computed window resolution.
         OpenGLRenderer renderer(windowW, windowH);
 
         bool running = true;
         SDL_Event event;
-        Mat fullFrame;
-        Mat inferenceFrame;
-        Mat dispFrame;
-        Mat rgbDispFrame;
+        Mat fullFrame, inferenceFrame, dispFrame, rgbDispFrame;
 
         while (running) {
             while (SDL_PollEvent(&event)) {
@@ -317,14 +413,18 @@ int main(int argc, char* argv[]) {
 
             if (!videoInput.getFrame(fullFrame))
                 continue;
+            // Mirror frame horizontally.
             flip(fullFrame, fullFrame, 1);
 
+            // Resize for inference.
             resize(fullFrame, inferenceFrame, Size(192, 192));
             float* output = poseEstimator.runInference(inferenceFrame);
 
+            // For display: resize full frame to current window size.
             int winWCurrent = renderer.getWidth();
             int winHCurrent = renderer.getHeight();
             resize(fullFrame, dispFrame, Size(winWCurrent, winHCurrent));
+            // Convert BGR to RGB.
             cvtColor(dispFrame, rgbDispFrame, COLOR_BGR2RGB);
             if (!rgbDispFrame.isContinuous())
                 rgbDispFrame = rgbDispFrame.clone();
