@@ -1,14 +1,12 @@
-// main_multipose_mask_scale.cpp
-// Multipose tracking with face mask overlay that scales the mask to span from ear to ear.
+// main_multipose_suit.cpp
+// Multipose tracking with suit overlay (face, torso, arms).
 // - Captures full-resolution frames from a video source (webcam or file).
-// - Resizes a copy to a small (192x192) image for TFLite multipose inference.
+// - Resizes a copy to 192x192 for TFLite multipose inference.
 // - Displays the full-resolution frame (resized to window size) using SDL2 and OpenGL.
 // - Draws persistent pose keypoints and connections.
-// - Overlays a face mask texture at the face position. If both ear keypoints are detected,
-//   the mask is scaled so that its width covers from left ear to right ear.
+// - Overlays separate suit-part textures (face, torso, left arm, right arm) on each detected person.
 // - The input source is specified via a command-line argument (default "0" for webcam).
 // - The SDL window is sized based on the input resolution but limited to the desktop dimensions.
-// All comments are in English.
 
 #include <opencv2/opencv.hpp>
 #include <tensorflow/lite/model.h>
@@ -87,7 +85,6 @@ public:
                 currentPoses.push_back({-1, center});
             }
         }
-
         vector<bool> used(prevPoses.size(), false);
         for (auto &curr : currentPoses) {
             float bestDist = numeric_limits<float>::max();
@@ -156,14 +153,14 @@ MaskTexture loadMaskTexture(const string& filename) {
 }
 
 //------------------------------------------------------------
-// drawFaceMaskRect: draws the mask texture as a rectangle centered at (centerX, centerY)
-// with given width and height.
+// drawTextureRect: draws a textured quad centered at (centerX, centerY)
+// with the specified width and height, using the provided texture.
 //------------------------------------------------------------
-void drawFaceMaskRect(float centerX, float centerY, float width, float height, const MaskTexture &mask) {
+void drawTextureRect(float centerX, float centerY, float width, float height, const MaskTexture &tex) {
     float halfW = width / 2.0f;
     float halfH = height / 2.0f;
-    glColor3f(1.0,1.0,1.0);
-    glBindTexture(GL_TEXTURE_2D, mask.textureID);
+    glColor3f(1.0f, 1.0f, 1.0f);
+    glBindTexture(GL_TEXTURE_2D, tex.textureID);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glBegin(GL_QUADS);
@@ -173,6 +170,91 @@ void drawFaceMaskRect(float centerX, float centerY, float width, float height, c
     glTexCoord2f(0.0f, 1.0f); glVertex2f(centerX - halfW, centerY + halfH);
     glEnd();
     glDisable(GL_BLEND);
+}
+
+//------------------------------------------------------------
+// SuitTextures: holds textures for different suit parts.
+//------------------------------------------------------------
+struct SuitTextures {
+    MaskTexture face;
+    MaskTexture torso;
+    MaskTexture leftArm;
+    MaskTexture rightArm;
+};
+
+//------------------------------------------------------------
+// drawSuitOverlayForPose: overlays suit parts on one detected pose.
+// The keypoints in the pose are scaled from the inference resolution (192x192)
+// using scaleX and scaleY (which map to display coordinates).
+//------------------------------------------------------------
+void drawSuitOverlayForPose(const float* pose, float scaleX, float scaleY, const SuitTextures &suit) {
+    // Face overlay: use nose (index 0), left ear (3) and right ear (4)
+    const float* nose = pose; // index 0
+    const float* leftEar = pose + 3 * 3;
+    const float* rightEar = pose + 3 * 4;
+    if (leftEar[2] >= keypointThreshold && rightEar[2] >= keypointThreshold) {
+        float x_left = leftEar[1] * 192 * scaleX;
+        float y_left = leftEar[0] * 192 * scaleY;
+        float x_right = rightEar[1] * 192 * scaleX;
+        float y_right = rightEar[0] * 192 * scaleY;
+        float faceWidth = norm(Point2f(x_left, y_left) - Point2f(x_right, y_right));
+        float faceHeight = faceWidth * (suit.face.height / static_cast<float>(suit.face.width));
+        float centerX = (x_left + x_right) / 2.0f;
+        float centerY = (y_left + y_right) / 2.0f;
+        drawTextureRect(centerX, centerY, faceWidth, faceHeight, suit.face);
+    } else if (nose[2] >= keypointThreshold) {
+        float centerX = nose[1] * 192 * scaleX;
+        float centerY = nose[0] * 192 * scaleY;
+        float faceWidth = 80.0f;
+        float faceHeight = faceWidth * (suit.face.height / static_cast<float>(suit.face.width));
+        drawTextureRect(centerX, centerY, faceWidth, faceHeight, suit.face);
+    }
+
+    // Torso overlay: use left shoulder (5), right shoulder (6), left hip (11), right hip (12)
+    const float* leftShoulder = pose + 3 * 5;
+    const float* rightShoulder = pose + 3 * 6;
+    const float* leftHip = pose + 3 * 11;
+    const float* rightHip = pose + 3 * 12;
+    if (leftShoulder[2] >= keypointThreshold && rightShoulder[2] >= keypointThreshold &&
+        leftHip[2] >= keypointThreshold && rightHip[2] >= keypointThreshold) {
+        float x1 = min({leftShoulder[1], rightShoulder[1], leftHip[1], rightHip[1]}) * 192 * scaleX;
+        float y1 = min({leftShoulder[0], rightShoulder[0], leftHip[0], rightHip[0]}) * 192 * scaleY;
+        float x2 = max({leftShoulder[1], rightShoulder[1], leftHip[1], rightHip[1]}) * 192 * scaleX;
+        float y2 = max({leftShoulder[0], rightShoulder[0], leftHip[0], rightHip[0]}) * 192 * scaleY;
+        float torsoWidth = x2 - x1;
+        float torsoHeight = y2 - y1;
+        float centerX = (x1 + x2) / 2.0f;
+        float centerY = (y1 + y2) / 2.0f;
+        drawTextureRect(centerX, centerY, torsoWidth, torsoHeight, suit.torso);
+    }
+
+    // Left arm overlay: use left shoulder (5) and left elbow (7)
+    const float* leftElbow = pose + 3 * 7;
+    if (leftShoulder[2] >= keypointThreshold && leftElbow[2] >= keypointThreshold) {
+        float x1 = leftShoulder[1] * 192 * scaleX;
+        float y1 = leftShoulder[0] * 192 * scaleY;
+        float x2 = leftElbow[1] * 192 * scaleX;
+        float y2 = leftElbow[0] * 192 * scaleY;
+        float armWidth = norm(Point2f(x1, y1) - Point2f(x2, y2));
+        float armHeight = armWidth * (suit.leftArm.height / static_cast<float>(suit.leftArm.width));
+        float centerX = (x1 + x2) / 2.0f;
+        float centerY = (y1 + y2) / 2.0f;
+        drawTextureRect(centerX, centerY, armWidth, armHeight, suit.leftArm);
+    }
+
+    // Right arm overlay: use right shoulder (6) and right elbow (8)
+    const float* rightElbow = pose + 3 * 8;
+    if (rightShoulder[2] >= keypointThreshold && rightElbow[2] >= keypointThreshold) {
+        float x1 = rightShoulder[1] * 192 * scaleX;
+        float y1 = rightShoulder[0] * 192 * scaleY;
+        float x2 = rightElbow[1] * 192 * scaleX;
+        float y2 = rightElbow[0] * 192 * scaleY;
+        float armWidth = norm(Point2f(x1, y1) - Point2f(x2, y2));
+        float armHeight = armWidth * (suit.rightArm.height / static_cast<float>(suit.rightArm.width));
+        float centerX = (x1 + x2) / 2.0f;
+        float centerY = (y1 + y2) / 2.0f;
+        drawTextureRect(centerX, centerY, armWidth, armHeight, suit.rightArm);
+    }
 }
 
 //------------------------------------------------------------
@@ -237,20 +319,17 @@ public:
             cerr << "Inference failed" << endl;
         return interpreter->typed_output_tensor<float>(0);
     }
-    // Draw poses, connections, and overlay face mask (scaled to span from ear to ear if possible).
+    // Draw pose keypoints, connections, and overlay suit textures.
     // displayImage: full-resolution image (resized to window size).
-    // mask: MaskTexture structure.
-    void drawPosesGL(const Mat &displayImage, float* output, const MaskTexture &mask) {
+    // suit: SuitTextures structure with suit-part textures.
+    void drawPosesGL(const Mat &displayImage, float* output, const SuitTextures &suit) {
         int dispWidth = displayImage.cols;
         int dispHeight = displayImage.rows;
         float scaleX = static_cast<float>(dispWidth) / static_cast<float>(inputWidth);
         float scaleY = static_cast<float>(dispHeight) / static_cast<float>(inputHeight);
         int numPoses = interpreter->tensor(interpreter->outputs()[0])->dims->data[1];
 
-        // Get persistent pose IDs.
-        vector<int> poseIds = tracker.trackPoses(output, numPoses, inputWidth, inputHeight, poseThreshold, keypointThreshold);
-
-        // Draw keypoints.
+        // Optionally draw keypoints and connections (this code remains as before)
         glPointSize(8.0f);
         glBegin(GL_POINTS);
         for (int p = 0; p < numPoses; p++) {
@@ -258,8 +337,8 @@ public:
             float score = pose[55];
             if (score < poseThreshold)
                 continue;
-            int id = poseIds[p];
-            Scalar poseColor = g_colors[(id >= 0 ? id : p) % g_colors.size()];
+            int id = p; // For keypoint color, you might use persistent IDs
+            Scalar poseColor = g_colors[id % g_colors.size()];
             glColor3f(poseColor[2] / 255.0f, poseColor[1] / 255.0f, poseColor[0] / 255.0f);
             for (int k = 0; k < 17; k++) {
                 const float* keypoint = pose + 3 * k;
@@ -272,7 +351,6 @@ public:
         }
         glEnd();
 
-        // Draw connections.
         glLineWidth(2.0f);
         glBegin(GL_LINES);
         for (int p = 0; p < numPoses; p++) {
@@ -280,8 +358,8 @@ public:
             float score = pose[55];
             if (score < poseThreshold)
                 continue;
-            int id = poseIds[p];
-            Scalar poseColor = g_colors[(id >= 0 ? id : p) % g_colors.size()];
+            int id = p;
+            Scalar poseColor = g_colors[id % g_colors.size()];
             glColor3f(poseColor[2] / 255.0f, poseColor[1] / 255.0f, poseColor[0] / 255.0f);
             for (const auto &conn : g_connections) {
                 const float* kp1 = pose + 3 * conn.first;
@@ -298,39 +376,12 @@ public:
         }
         glEnd();
 
-        // Overlay face mask.
+        // For each detected pose, overlay the suit parts.
         for (int p = 0; p < numPoses; p++) {
             const float* pose = output + (56 * p);
-            float score = pose[55];
-            if (score < poseThreshold)
+            if (pose[55] < poseThreshold)
                 continue;
-            // Try to get left and right ear keypoints (indexes 3 and 4).
-            const float* leftEar = pose + 3 * 3;
-            const float* rightEar = pose + 3 * 4;
-            float maskWidth = 0.0f;
-            float maskHeight = 0.0f;
-            float centerX = 0.0f, centerY = 0.0f;
-            if (leftEar[2] >= keypointThreshold && rightEar[2] >= keypointThreshold) {
-                float x_left = leftEar[1] * inputWidth * scaleX;
-                float y_left = leftEar[0] * inputHeight * scaleY;
-                float x_right = rightEar[1] * inputWidth * scaleX;
-                float y_right = rightEar[0] * inputHeight * scaleY;
-                maskWidth = norm(Point2f(x_left, y_left) - Point2f(x_right, y_right));
-                // Compute height using the mask image's aspect ratio.
-                maskHeight = maskWidth * (mask.height / static_cast<float>(mask.width));
-                centerX = (x_left + x_right) / 2.0f;
-                centerY = (y_left + y_right) / 2.0f;
-            } else {
-                // Fallback: use the nose keypoint (index 0).
-                const float* nose = pose;
-                if (nose[2] < keypointThreshold)
-                    continue;
-                centerX = nose[1] * inputWidth * scaleX;
-                centerY = nose[0] * inputHeight * scaleY;
-                maskWidth = 80.0f;
-                maskHeight = maskWidth * (mask.height / static_cast<float>(mask.width));
-            }
-            drawFaceMaskRect(centerX, centerY, maskWidth, maskHeight, mask);
+            drawSuitOverlayForPose(pose, scaleX, scaleY, suit);
         }
     }
 private:
@@ -353,7 +404,7 @@ public:
             : windowWidth(initialWidth), windowHeight(initialHeight),
               textureWidth(initialWidth), textureHeight(initialHeight)
     {
-        window = SDL_CreateWindow("Multipose Tracking", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        window = SDL_CreateWindow("Multipose Suit Overlay", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                   windowWidth, windowHeight,
                                   SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
         if (!window)
@@ -422,7 +473,7 @@ private:
 };
 
 //------------------------------------------------------------
-// Main function: sets up video input, TFLite inference, and OpenGL rendering.
+// Main function: sets up video input, TFLite inference, and OpenGL rendering with suit overlay.
 //------------------------------------------------------------
 int main(int argc, char* argv[]) {
     try {
@@ -432,15 +483,13 @@ int main(int argc, char* argv[]) {
         SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
         // Initialize SDL video subsystem.
-        if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+        if (SDL_Init(SDL_INIT_VIDEO) < 0)
             throw runtime_error(string("SDL_Init Error: ") + SDL_GetError());
-        }
 
         // Default source is "0" (webcam); can be overridden via command-line.
         string source = "0";
-        if (argc > 1) {
+        if (argc > 1)
             source = argv[1];
-        }
         VideoInputWrapper videoInput(source);
 
         // Get input resolution.
@@ -450,9 +499,8 @@ int main(int argc, char* argv[]) {
 
         // Query desktop resolution.
         SDL_DisplayMode dm;
-        if (SDL_GetCurrentDisplayMode(0, &dm) != 0) {
+        if (SDL_GetCurrentDisplayMode(0, &dm) != 0)
             throw runtime_error(string("SDL_GetCurrentDisplayMode Error: ") + SDL_GetError());
-        }
         int desktopW = dm.w;
         int desktopH = dm.h;
         cout << "Desktop resolution: " << desktopW << "x" << desktopH << endl;
@@ -466,8 +514,12 @@ int main(int argc, char* argv[]) {
         // Create OpenGLRenderer.
         OpenGLRenderer renderer(windowW, windowH);
 
-        // Now that the GL context is active, load the mask texture.
-        MaskTexture mask = loadMaskTexture("../mask.png");
+        // Now that the GL context is active, load suit-part textures.
+        SuitTextures suit;
+        suit.face = loadMaskTexture("../suit_face.png");
+        suit.torso = loadMaskTexture("../suit_torso.png");
+        suit.leftArm = loadMaskTexture("../suit_left_arm.png");
+        suit.rightArm = loadMaskTexture("../suit_right_arm.png");
 
         // Create PoseEstimator with inference resolution 192x192.
         string modelPath = "../lite-model_movenet_multipose_lightning_tflite_float16_4.tflite";
@@ -505,8 +557,8 @@ int main(int argc, char* argv[]) {
             renderer.updateTexture(rgbDispFrame);
             glClear(GL_COLOR_BUFFER_BIT);
             renderer.renderQuad();
-            // Draw pose overlays with mask overlays.
-            poseEstimator.drawPosesGL(dispFrame, output, mask);
+            // Draw pose overlays and suit-part overlays.
+            poseEstimator.drawPosesGL(dispFrame, output, suit);
             SDL_GL_SwapWindow(renderer.getWindow());
         }
     }
