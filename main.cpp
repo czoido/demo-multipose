@@ -1,10 +1,12 @@
 // main_multipose_refactored.cpp
 // Refactored multipose tracking example.
-// - Captures full-resolution frames from the webcam.
-// - Creates a small inference image (192x192) to run TFLite multipose inference.
+// - Captures full-resolution frames from a video input (webcam or video file).
+// - Creates a small inference image (192x192) for TFLite multipose inference.
 // - Uses the full-resolution frame (resized to window size) for display.
 // - Draws pose keypoints and connections over the display image,
 //   scaling the keypoints from the inference resolution to display resolution.
+// - The input source is selected via a command-line argument. If none is provided,
+//   the default webcam (device 0) is used.
 // All comments are in English.
 
 #include <opencv2/opencv.hpp>
@@ -19,6 +21,7 @@
 #include <chrono>
 #include <cmath>
 #include <stdexcept>
+#include <string>
 
 using namespace std;
 using namespace cv;
@@ -44,16 +47,22 @@ const float poseThreshold = 0.2f;
 const float keypointThreshold = 0.2f;
 
 //------------------------------------------------------------
-// WebcamCapture class: wraps OpenCV VideoCapture.
+// VideoInput class: wraps OpenCV VideoCapture for generic input.
 //------------------------------------------------------------
-class WebcamCapture {
+class VideoInput {
 public:
-    WebcamCapture(int device = 0) {
-        cap.open(device);
+    // The source parameter can be either a camera device index (as a string) or a video file path.
+    VideoInput(const string &source) {
+        try {
+            int device = stoi(source);
+            cap.open(device);
+        } catch (const exception &e) {
+            cap.open(source);
+        }
         if (!cap.isOpened())
-            throw runtime_error("Failed to open webcam");
+            throw runtime_error("Failed to open video source: " + source);
     }
-    // Returns a full-resolution frame.
+    // Get a full-resolution frame.
     bool getFrame(Mat &frame) {
         cap >> frame;
         return !frame.empty();
@@ -101,7 +110,7 @@ public:
     }
 
     // Draw pose keypoints and connections using OpenGL.
-    // displayImage: full-resolution image (already resized to window size).
+    // displayImage: full-resolution image (resized to window size).
     // The keypoints output is relative to the inference resolution.
     void drawPosesGL(const Mat &displayImage, float* output) {
         int dispWidth = displayImage.cols;
@@ -237,7 +246,7 @@ public:
 
     // Render a textured quad covering the entire window.
     void renderQuad() {
-        glColor3f(1.0,1.0,1.0);
+        glColor3f(1.0, 1.0, 1.0); // Ensure quad is rendered with white color
         glBegin(GL_QUADS);
         glTexCoord2f(0.0f, 0.0f); glVertex2f(0, 0);
         glTexCoord2f(1.0f, 0.0f); glVertex2f(windowWidth, 0);
@@ -263,11 +272,17 @@ private:
 //------------------------------------------------------------
 // Main function: integrates full-resolution capture,
 // inference on a small image, and scaled display with pose overlay.
+// Now accepts an optional command-line argument for input source.
+// If no argument is provided, the default webcam (device 0) is used.
 //------------------------------------------------------------
 int main(int argc, char* argv[]) {
     try {
-        // Create webcam capture instance.
-        WebcamCapture webcam(0);
+        string source = "0";  // Default source: webcam device 0.
+        if (argc > 1) {
+            source = argv[1];
+        }
+        // Create video input instance (webcam or video file).
+        VideoInput videoInput(source);
 
         // Create PoseEstimator using a small inference size (192x192).
         string modelPath = "../lite-model_movenet_multipose_lightning_tflite_float16_4.tflite";
@@ -297,7 +312,7 @@ int main(int argc, char* argv[]) {
             }
 
             // Capture a full-resolution frame.
-            if (!webcam.getFrame(fullFrame))
+            if (!videoInput.getFrame(fullFrame))
                 continue;
             // Mirror full frame horizontally.
             flip(fullFrame, fullFrame, 1);
@@ -329,7 +344,6 @@ int main(int argc, char* argv[]) {
             // Draw pose overlays on top (scaling from inference to display resolution).
             poseEstimator.drawPosesGL(dispFrame, output);
 
-            // Swap buffers.
             SDL_GL_SwapWindow(renderer.getWindow());
 
             lastTime = chrono::steady_clock::now();
