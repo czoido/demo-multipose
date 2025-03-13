@@ -1,12 +1,13 @@
 // main_multipose_refactored.cpp
 // Refactored multipose tracking example.
-// - Captures full-resolution frames from a video input (webcam or video file).
+// - Captures full-resolution frames from a video input (webcam or file).
 // - Creates a small inference image (192x192) for TFLite multipose inference.
 // - Uses the full-resolution frame (resized to window size) for display.
 // - Draws pose keypoints and connections over the display image,
 //   scaling the keypoints from the inference resolution to display resolution.
-// - The input source is selected via a command-line argument. If none is provided,
-//   the default webcam (device 0) is used.
+// - The input source is selected via a command-line argument.
+//   If no argument is provided, the default webcam (device 0) is used.
+// The window is initially created with the same resolution as the input.
 // All comments are in English.
 
 #include <opencv2/opencv.hpp>
@@ -65,21 +66,27 @@ public:
             throw runtime_error("Failed to open video source: " + source);
     }
     // Get a full-resolution frame.
-    // If using a video file and the frame is empty, reset the video to the start.
     bool getFrame(Mat &frame) {
         cap >> frame;
         if (frame.empty() && !isCamera) {
-            // Reset to the beginning for video files
+            // Loop video for file input.
             cap.set(CAP_PROP_POS_FRAMES, 0);
             cap >> frame;
         }
         return !frame.empty();
     }
+    // Get input frame width.
+    double getFrameWidth() const {
+        return cap.get(CAP_PROP_FRAME_WIDTH);
+    }
+    // Get input frame height.
+    double getFrameHeight() const {
+        return cap.get(CAP_PROP_FRAME_HEIGHT);
+    }
 private:
     VideoCapture cap;
     bool isCamera;
 };
-
 
 //------------------------------------------------------------
 // PoseEstimator class: loads and runs the TFLite multipose model
@@ -108,31 +115,24 @@ public:
                 throw runtime_error("Failed to reallocate tensors");
         }
     }
-
     // Run inference on a small (192x192) image.
     float* runInference(const Mat &inferenceImage) {
-        // Assumes inferenceImage is already of size inputWidth x inputHeight.
         memcpy(interpreter->typed_input_tensor<unsigned char>(0), inferenceImage.data,
                inferenceImage.total() * inferenceImage.elemSize());
         if (interpreter->Invoke() != kTfLiteOk)
             cerr << "Inference failed" << endl;
         return interpreter->typed_output_tensor<float>(0);
     }
-
     // Draw pose keypoints and connections using OpenGL.
     // displayImage: full-resolution image (resized to window size).
     // The keypoints output is relative to the inference resolution.
     void drawPosesGL(const Mat &displayImage, float* output) {
         int dispWidth = displayImage.cols;
         int dispHeight = displayImage.rows;
-        // Scaling factors from inference resolution to display resolution.
         float scaleX = static_cast<float>(dispWidth) / static_cast<float>(inputWidth);
         float scaleY = static_cast<float>(dispHeight) / static_cast<float>(inputHeight);
-
-        // Get number of poses from the output tensor shape.
         int numPoses = interpreter->tensor(interpreter->outputs()[0])->dims->data[1];
 
-        // Draw keypoints.
         glPointSize(8.0f);
         glBegin(GL_POINTS);
         for (int p = 0; p < numPoses; p++) {
@@ -153,7 +153,6 @@ public:
         }
         glEnd();
 
-        // Draw connections.
         glLineWidth(2.0f);
         glBegin(GL_LINES);
         for (int p = 0; p < numPoses; p++) {
@@ -178,7 +177,6 @@ public:
         }
         glEnd();
     }
-
 private:
     unique_ptr<tflite::FlatBufferModel> model;
     unique_ptr<tflite::Interpreter> interpreter;
@@ -244,7 +242,6 @@ public:
     void updateTexture(const Mat &frame) {
         glBindTexture(GL_TEXTURE_2D, textureID);
         if (frame.cols != textureWidth || frame.rows != textureHeight) {
-            // Reallocate texture storage and update stored dimensions.
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, frame.cols, frame.rows, 0, GL_RGB, GL_UNSIGNED_BYTE, frame.data);
             textureWidth = frame.cols;
             textureHeight = frame.rows;
@@ -256,7 +253,7 @@ public:
 
     // Render a textured quad covering the entire window.
     void renderQuad() {
-        glColor3f(1.0, 1.0, 1.0); // Ensure quad is rendered with white color
+        glColor3f(1.0, 1.0, 1.0);
         glBegin(GL_QUADS);
         glTexCoord2f(0.0f, 0.0f); glVertex2f(0, 0);
         glTexCoord2f(1.0f, 0.0f); glVertex2f(windowWidth, 0);
@@ -282,26 +279,30 @@ private:
 //------------------------------------------------------------
 // Main function: integrates full-resolution capture,
 // inference on a small image, and scaled display with pose overlay.
-// Now accepts an optional command-line argument for input source.
-// If no argument is provided, the default webcam (device 0) is used.
+// The input source is selected via a command-line argument.
+// The SDL window is initially sized to the input source resolution.
 //------------------------------------------------------------
 int main(int argc, char* argv[]) {
     try {
-        string source = "0";  // Default source: webcam device 0.
+        // Default source is "0" (webcam device 0)
+        string source = "0";
         if (argc > 1) {
             source = argv[1];
         }
-        // Create video input instance (webcam or video file).
+        // Create video input instance (webcam or file)
         VideoInput videoInput(source);
+
+        // Obtain the input resolution from the video source.
+        int inputWidth = static_cast<int>(videoInput.getFrameWidth());
+        int inputHeight = static_cast<int>(videoInput.getFrameHeight());
+        cout << "Input resolution: " << inputWidth << "x" << inputHeight << endl;
 
         // Create PoseEstimator using a small inference size (192x192).
         string modelPath = "../lite-model_movenet_multipose_lightning_tflite_float16_4.tflite";
         PoseEstimator poseEstimator(modelPath, true, 192, 192);
 
-        // Create OpenGLRenderer with a default display resolution (e.g., 640x480).
-        int displayDefaultWidth = 640;
-        int displayDefaultHeight = 480;
-        OpenGLRenderer renderer(displayDefaultWidth, displayDefaultHeight);
+        // Create OpenGLRenderer with the input resolution.
+        OpenGLRenderer renderer(inputWidth, inputHeight);
 
         bool running = true;
         SDL_Event event;
@@ -309,8 +310,6 @@ int main(int argc, char* argv[]) {
         Mat inferenceFrame;    // Resized frame for inference (192x192).
         Mat dispFrame;         // Full-resolution frame resized to window size.
         Mat rgbDispFrame;      // dispFrame converted to RGB.
-
-        auto lastTime = chrono::steady_clock::now();
 
         while (running) {
             // Process SDL events.
@@ -324,7 +323,7 @@ int main(int argc, char* argv[]) {
             // Capture a full-resolution frame.
             if (!videoInput.getFrame(fullFrame))
                 continue;
-            // Mirror full frame horizontally.
+            // Mirror the frame horizontally.
             flip(fullFrame, fullFrame, 1);
 
             // Create inference frame: resize fullFrame to 192x192.
@@ -351,12 +350,10 @@ int main(int argc, char* argv[]) {
             // Render the textured quad.
             renderer.renderQuad();
 
-            // Draw pose overlays on top (scaling from inference to display resolution).
+            // Draw pose overlays on top (scaled from inference to display resolution).
             poseEstimator.drawPosesGL(dispFrame, output);
 
             SDL_GL_SwapWindow(renderer.getWindow());
-
-            lastTime = chrono::steady_clock::now();
         }
     }
     catch (const exception &e) {
