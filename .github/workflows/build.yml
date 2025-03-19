@@ -28,5 +28,9 @@ jobs:
         pip install conan
         conan profile detect
         conan install . --build=missing -c tools.system.package_manager:mode=install -c tools.system.package_manager:sudo=True -s compiler.cppstd=17
-        cmake --preset=conan-release
-        cmake --build --preset=conan-release
+        if [ "${{ matrix.os }}" == "windows-latest" ]; then
+          cmake --preset=conan-default
+        else
+          cmake --preset=conan-release
+        fi
+        cmake --build --preset=conan-default
