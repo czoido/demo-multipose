@@ -27,6 +27,6 @@ jobs:
       run: |
         pip install conan
         conan profile detect
-        conan install . --build=missing
+        conan install . --build=missing -c tools.system.package_manager:mode=install
         cmake --preset=conan-release
         cmake --build --preset=conan-release
