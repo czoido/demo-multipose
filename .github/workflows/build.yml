@@ -24,6 +24,7 @@ jobs:
         python-version: '3.10'
 
     - name: Build Demo
+      shell: bash
       run: |
         pip install conan
         conan profile detect
