@@ -34,4 +34,4 @@ jobs:
         else
           cmake --preset=conan-release
         fi
-        cmake --build --preset=conan-default
+        cmake --build --preset=conan-release
