@@ -18,6 +18,7 @@ struct SuitTexture {
 
 // SuitScaleFactors holds scale multipliers for each suit part.
 struct SuitScaleFactors {
+    float head;
     float face;
     float torso;
     float leftArm;
@@ -32,6 +33,7 @@ struct SuitScaleFactors {
 
 // SuitImages holds textures for various suit parts.
 struct SuitImages {
+    SuitTexture head;
     SuitTexture face;
     SuitTexture torso;
     SuitTexture leftArm;
