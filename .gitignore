@@ -5,3 +5,4 @@ conan_provider.cmake
 .DS_Store
 *.mp4
 build/
+CMakeUserPresets.json
