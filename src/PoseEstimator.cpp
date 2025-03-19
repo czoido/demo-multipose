@@ -1,3 +1,8 @@
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 #include "PoseEstimator.h"
 #include <opencv2/opencv.hpp>
 #include <SDL_opengl.h>
