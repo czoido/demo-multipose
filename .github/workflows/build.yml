@@ -2,9 +2,9 @@ name: Cross-platform Build
 
 on:
   push:
-    branches: [ main ]
+    branches: [ costumes ]
   pull_request:
-    branches: [ main ]
+    branches: [ costumes ]
   workflow_dispatch:
 
 jobs:
