@@ -46,6 +46,7 @@ int main(int argc, char* argv[]) {
 
         // Load suit textures.
         SuitImages suit;
+        suit.head = loadSuitTexture("../assets/red-hat.png");
         suit.face = loadSuitTexture("../assets/face.png");
         suit.torso = loadSuitTexture("../assets/torso.png");
         suit.leftArm = loadSuitTexture("../assets/left_arm.png");
@@ -59,6 +60,7 @@ int main(int argc, char* argv[]) {
 
         // Define scale factors.
         SuitScaleFactors scales;
+        scales.head = 2.0f;
         scales.face = 3.5f;
         scales.torso = 1.0f;
         scales.leftArm = 1.0f;

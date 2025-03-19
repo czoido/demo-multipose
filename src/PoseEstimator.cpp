@@ -141,6 +141,26 @@ void PoseEstimator::drawPosesGL(const Mat &displayImage, float* output, const Su
             drawTextureRect(centerX, centerY, faceWidth, faceHeight, suit.face);
         }
 
+        // --- Hat overlay using ears and nose ---
+        const float* leftEar = pose + 3 * 3;
+        const float* rightEar = pose + 3 * 4;
+
+        if (leftEar[2] >= keypointThreshold && rightEar[2] >= keypointThreshold) {
+            float x_left = leftEar[1] * inputWidth * scaleX;
+            float y_left = leftEar[0] * inputHeight * scaleY;
+            float x_right = rightEar[1] * inputWidth * scaleX;
+            float y_right = rightEar[0] * inputHeight * scaleY;
+            float x_nose = nose[1] * inputWidth * scaleX;
+            float y_nose = nose[0] * inputHeight * scaleY;
+            // Head width based on ear distance
+            float headWidth = norm(Point2f(x_left, y_left) - Point2f(x_right, y_right)) * scales.head;
+            float headHeight = headWidth * (static_cast<float>(suit.head.height) / suit.head.width);
+            // Hat center above nose, slightly above head
+            float centerX = x_nose;
+            float centerY = y_nose - headHeight * 0.9f;  // Move hat higher
+            drawTextureRect(centerX, centerY, headWidth, headHeight, suit.head);
+        }
+
         // --- Torso overlay: from shoulders (indices 5,6) to hips (indices 11,12) ---
         const float* leftShoulder = pose + 3 * 5;
         const float* rightShoulder = pose + 3 * 6;
