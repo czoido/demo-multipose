@@ -1,7 +1,7 @@
 ```
-conan install . --build=missing -s="build_type=Release"
-cd build
-cmake .. -G "Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE=Release/generators/conan_toolchain.cmake  -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_BUILD_TYPE=Release
-cmake --build .
-./webcam_multipose
+pip install conan
+conan profile detect
+conan install . --build=missing
+cmake --preset=conan-release
+cmake --build --preset=conan-release
 ```
