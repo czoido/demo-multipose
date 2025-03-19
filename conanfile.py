@@ -15,7 +15,7 @@ class ConanApplication(ConanFile):
     def generate(self):
         tc = CMakeToolchain(self)
         # user_presets_path is False because this project was made using the CLion plugin
-        tc.user_presets_path = False
+        # tc.user_presets_path = False
         tc.generate()
 
     def requirements(self):
